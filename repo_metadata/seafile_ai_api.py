@@ -12,7 +12,7 @@ def parse_response(response):
 
 
 class SeafileAIAPI:
-    def __init__(self, server_url, secret_key, timeout=90):
+    def __init__(self, server_url, secret_key, timeout=420):
         self.timeout = timeout
         self.secret_key = secret_key
         self.server_url = server_url
@@ -24,7 +24,7 @@ class SeafileAIAPI:
 
     def face_embeddings(self, path, download_token, need_face=False):
         headers = self.gen_headers()
-        url = f'{self.server_url}/api/v1/face-embeddings'
+        url = f'{self.server_url}/api/v1/face-embeddings/'
         data = {
             'path': path,
             'download_token': download_token,

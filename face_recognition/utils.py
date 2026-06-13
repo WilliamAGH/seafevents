@@ -2,6 +2,7 @@ import base64
 import os
 import json
 import posixpath
+import logging
 
 from seaserv import seafile_api
 
@@ -14,6 +15,7 @@ from seafevents.repo_metadata.seafile_ai_api import SeafileAIAPI
 
 
 VECTOR_DEFAULT_FLAG = '0'
+logger = logging.getLogger('face_recognition')
 FACE_EMBEDDING_DIM = 512
 FACES_TMP_DIR = '/tmp'
 FACES_SAVE_PATH = '_Internal/Faces'
@@ -89,30 +91,92 @@ def get_image_face(path, download_token, seafile_ai_api, center=None):
 
 
 def save_cluster_face(repo_id, related_row_ids, row_ids, id_to_record, cluster_center, face_row_id, seafile_ai_api):
-    face_image = None
-    for row_id in related_row_ids:
-        if row_ids.count(row_id) == 1:
-            record = id_to_record[row_id]
-            break
+    try:
+        face_image = None
+        for row_id in related_row_ids:
+            if row_ids.count(row_id) == 1:
+                record = id_to_record[row_id]
+                break
 
-    if not face_image:
-        record = id_to_record[related_row_ids[0]]
-    obj_id = record[METADATA_TABLE.columns.obj_id.name]
-    parent_dir = record.get(METADATA_TABLE.columns.parent_dir.name)
-    file_name = record.get(METADATA_TABLE.columns.file_name.name)
-    path = os.path.join(parent_dir, file_name)
-    token = seafile_api.get_fileserver_access_token(repo_id, obj_id, 'download', 'system', use_onetime=True)
-    face_image = get_image_face(path, token, seafile_ai_api, cluster_center.tolist())
+        if not face_image:
+            record = id_to_record[related_row_ids[0]]
+        obj_id = record[METADATA_TABLE.columns.obj_id.name]
+        parent_dir = record.get(METADATA_TABLE.columns.parent_dir.name)
+        file_name = record.get(METADATA_TABLE.columns.file_name.name)
+        path = os.path.join(parent_dir, file_name)
+        token = seafile_api.get_fileserver_access_token(repo_id, obj_id, 'download', 'system', use_onetime=True)
+        face_image = get_image_face(path, token, seafile_ai_api, cluster_center.tolist())
 
-    if not face_image:
-        return
+        if not face_image:
+            return
 
-    filename = f'{face_row_id}.jpg'
-    save_face(repo_id, face_image, filename)
+        filename = f'{face_row_id}.jpg'
+        save_face(repo_id, face_image, filename)
+    except Exception as e:
+        logger.warning('repo %s failed to save cluster cover for face_row_id=%s: %s', repo_id, face_row_id, e)
 
 
 def get_min_cluster_size(faces_num):
-    return max(faces_num // 100, 5)
+    # The stock 1% heuristic explodes on large libraries (e.g. 162k vectors -> 1625),
+    # which also makes HDBSCAN default min_samples far too expensive.
+    return min(max(faces_num // 100, 5), 50)
+
+
+def merge_duplicate_cluster_labels(vectors, clt_labels, threshold=0.22):
+    import numpy as np
+
+    clt_labels = np.array(clt_labels)
+    label_ids = [int(label_id) for label_id in np.unique(clt_labels) if int(label_id) != -1]
+    if len(label_ids) < 2:
+        return clt_labels, []
+
+    label_to_indices = {label_id: np.where(clt_labels == label_id)[0] for label_id in label_ids}
+    label_to_center = {
+        label_id: np.mean([vectors[idx] for idx in indices], axis=0)
+        for label_id, indices in label_to_indices.items()
+    }
+
+    parents = {label_id: label_id for label_id in label_ids}
+
+    def find(label_id):
+        while parents[label_id] != label_id:
+            parents[label_id] = parents[parents[label_id]]
+            label_id = parents[label_id]
+        return label_id
+
+    def union(left, right):
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parents[right_root] = left_root
+
+    for index, label_id in enumerate(label_ids):
+        for other_label_id in label_ids[index + 1:]:
+            distance = feature_distance(label_to_center[label_id], label_to_center[other_label_id])
+            if distance <= threshold:
+                union(label_id, other_label_id)
+
+    grouped_labels = {}
+    for label_id in label_ids:
+        grouped_labels.setdefault(find(label_id), []).append(label_id)
+
+    merged_groups = []
+    for component in grouped_labels.values():
+        if len(component) < 2:
+            continue
+        component = sorted(component, key=lambda item: len(label_to_indices[item]), reverse=True)
+        target_label = component[0]
+        component_size = sum(len(label_to_indices[item]) for item in component)
+        merged_groups.append({
+            'target': int(target_label),
+            'merged': [int(item) for item in component[1:]],
+            'size': int(component_size),
+            'distance_threshold': threshold,
+        })
+        for merged_label in component[1:]:
+            clt_labels[clt_labels == merged_label] = target_label
+
+    return clt_labels, merged_groups
 
 
 def save_face(repo_id, image, filename, replace=False):

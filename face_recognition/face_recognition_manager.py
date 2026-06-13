@@ -15,7 +15,7 @@ from seafevents.repo_metadata.constants import METADATA_TABLE, FACES_TABLE
 from seafevents.face_recognition.constants import UNKNOWN_PEOPLE_NAME
 from seafevents.face_recognition.utils import get_faces_rows, get_cluster_by_center, b64encode_embeddings, \
     b64decode_embeddings, VECTOR_DEFAULT_FLAG, get_min_cluster_size, SUPPORTED_IMAGE_FORMATS, EMBEDDING_UPDATE_LIMIT, \
-    save_cluster_face, get_image_face, save_face
+    save_cluster_face, get_image_face, save_face, merge_duplicate_cluster_labels
 from seafevents.app.config import ENABLE_SEAFILE_AI, SEAFILE_AI_SECRET_KEY, SEAFILE_AI_SERVER_URL
 
 from seaserv import seafile_api
@@ -155,18 +155,31 @@ class FaceRecognitionManager(object):
 
         culstered_rows, unclustered_rows = get_faces_rows(repo_id, self.metadata_server_api)
         min_cluster_size = get_min_cluster_size(len(vectors))
+        min_samples = min(min_cluster_size, 10)
+        logger.info('repo %s face cluster inputs: rows=%d vectors=%d existing_clusters=%d unclustered_clusters=%d min_cluster_size=%d min_samples=%d',
+                    repo_id, len(query_result), len(vectors), len(culstered_rows), len(unclustered_rows),
+                    min_cluster_size, min_samples)
         if len(vectors) < min_cluster_size:
             clt_labels = [-1] * len(vectors)
+            logger.info('repo %s vectors smaller than min_cluster_size; marking all faces as noise', repo_id)
         else:
-            clt = HDBSCAN(min_cluster_size=min_cluster_size)
+            fit_start = time.time()
+            logger.info('repo %s starting HDBSCAN fit', repo_id)
+            clt = HDBSCAN(min_cluster_size=min_cluster_size, min_samples=min_samples, n_jobs=-1)
             clt.fit(vectors)
             clt_labels = clt.labels_
+            logger.info('repo %s HDBSCAN fit completed in %.2fs', repo_id, time.time() - fit_start)
+
+        clt_labels, merged_label_groups = merge_duplicate_cluster_labels(vectors, clt_labels)
+        if merged_label_groups:
+            logger.info('repo %s merged duplicate face labels: %s', repo_id, json.dumps(merged_label_groups))
 
         cluster_id_to_min_distance = {}
         label_id_to_added_cluster = {}
         label_id_to_updated_cluster = {}
         cluster_id_to_label = {}
         label_ids = np.unique(clt_labels)
+        logger.info('repo %s HDBSCAN labels: unique=%d noise_faces=%d', repo_id, len(label_ids), int((clt_labels == -1).sum()) if hasattr(clt_labels, 'sum') else clt_labels.count(-1))
         for label_id in label_ids:
             idxs = np.where(clt_labels == label_id)[0]
             related_row_ids = [row_ids[i] for i in idxs]
@@ -194,9 +207,11 @@ class FaceRecognitionManager(object):
                     if old_distance > distance:
                         label_id_to_updated_cluster[label_id] = (face_row, related_row_ids, cluster_id, cluster_center)
                         old_label_id = cluster_id_to_label.get(cluster_id)
-                        old_cluster_info = label_id_to_updated_cluster.pop(old_label_id)
+                        old_cluster_info = label_id_to_updated_cluster.pop(old_label_id, None)
                         cluster_id_to_min_distance[cluster_id] = distance
-                        label_id_to_added_cluster[old_label_id] = (old_cluster_info[0], old_cluster_info[1], old_cluster_info[3])
+                        cluster_id_to_label[cluster_id] = label_id
+                        if old_cluster_info is not None:
+                            label_id_to_added_cluster[old_label_id] = (old_cluster_info[0], old_cluster_info[1], old_cluster_info[3])
                     else:
                         label_id_to_added_cluster[label_id] = (face_row, related_row_ids, cluster_center)
                 else:
@@ -205,6 +220,8 @@ class FaceRecognitionManager(object):
                     cluster_id_to_min_distance[cluster_id] = distance
                 continue
             label_id_to_added_cluster[label_id] = (face_row, related_row_ids, cluster_center)
+
+        logger.info('repo %s clusters to update=%d add=%d', repo_id, len(label_id_to_updated_cluster), len(label_id_to_added_cluster))
 
         for value in label_id_to_updated_cluster.values():
             face_row, related_row_ids, cluster_id, _ = value
