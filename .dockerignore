@@ -1,0 +1,13 @@
+# Build context = repo root; only the patched .py files + docker/seahub are COPYed.
+.git
+.github
+**/__pycache__
+**/*.pyc
+**/*.pyo
+*.md
+docker/*.md
+tests
+test
+ci
+.gitignore
+.gitattributes
