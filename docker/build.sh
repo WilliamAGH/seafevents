@@ -11,7 +11,7 @@
 #   PUSH=1 ./docker/build.sh          # build + push (needs `docker login` on the build host)
 set -euo pipefail
 
-REGISTRY="${REGISTRY:-docker.iocloudhost.net}"
+REGISTRY="${REGISTRY:-registry.haiku.host}"
 IMAGE="${IMAGE:-seafile/seafile-pro-mc}"
 VERSION="${VERSION:-13.0.19-patched.2}"          # immutable per-patch revision
 ROLLING="${ROLLING:-13.0-patched-latest}"        # rolling tag for Coolify to track

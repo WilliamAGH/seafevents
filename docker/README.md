@@ -34,9 +34,9 @@ production.
 
 ```bash
 ./docker/build.sh            # build on sf3 (x86_64) via DOCKER_HOST=ssh
-PUSH=1 ./docker/build.sh     # build + push to docker.iocloudhost.net
+PUSH=1 ./docker/build.sh     # build + push to registry.haiku.host
 ```
 
 Then point the Coolify `seafile` service `image:` at
-`docker.iocloudhost.net/seafile/seafile-pro-mc:13.0-patched-latest` and remove
+`registry.haiku.host/seafile/seafile-pro-mc:13.0-patched-latest` and remove
 the inline boot-patch `command:` from the compose.
