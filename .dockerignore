@@ -7,7 +7,12 @@
 *.md
 docker/*.md
 tests
+!tests
+tests/**
+!tests/seasearch
+!tests/seasearch/test_extract_encoding.py
 test
 ci
 .gitignore
 .gitattributes
+.worktrees

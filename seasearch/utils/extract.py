@@ -176,22 +176,20 @@ class Extractor(object):
 
         return self.fix_encoding(repo_id, path, content)
 
-    def fix_encoding(self, repo_id, path, content):
-        if not content:
+    def fix_encoding(self, repo_id, path, encoded_text):
+        if not encoded_text:
             return None
-        enc = chardet.detect(content[:4000]).get('encoding', None)
-        if not enc:
-            logger.warning('%s %s: encoding is unknown', repo_id, path)
-            return None
-        enc = enc.lower()
-
         try:
-            content = content.decode(enc).encode('utf-8').decode('utf-8')
-        except Exception as e:
-            logger.warning('%s: %s failed to trans code from %s to utf-8, because: %s', repo_id, path, enc, e)
-            return None
-
-        return content
+            return encoded_text.decode('utf-8-sig')
+        except UnicodeDecodeError as utf8_error:
+            # A prefix guess cannot disprove valid UTF-8 later in the file.
+            encoding = chardet.detect(encoded_text).get('encoding')
+            if not encoding:
+                raise UnicodeError('%s %s: encoding is unknown' % (repo_id, path)) from utf8_error
+            try:
+                return encoded_text.decode(encoding)
+            except UnicodeError as legacy_error:
+                raise UnicodeError('%s %s: failed to decode %s text' % (repo_id, path, encoding)) from legacy_error
 
 
 class ExtractorFactory(object):

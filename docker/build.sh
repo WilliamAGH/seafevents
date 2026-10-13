@@ -1,37 +1,41 @@
 #!/usr/bin/env bash
-# Build (and optionally push) the patched seafile-pro-mc image.
-#
-# The build runs on the x86_64 deploy host (sf3) via DOCKER_HOST=ssh, because:
-#   - the deploy target is x86_64 (this Mac is arm64),
-#   - sf3 already has the base image layers cached,
-#   - the resulting image lands on the daemon that will run it / push it.
-#
-# Usage:
-#   ./docker/build.sh                 # build only
-#   PUSH=1 ./docker/build.sh          # build + push (needs `docker login` on the build host)
 set -euo pipefail
 
-REGISTRY="${REGISTRY:-registry.haiku.host}"
-IMAGE="${IMAGE:-seafile/seafile-pro-mc}"
-VERSION="${VERSION:-13.0.19-patched.2}"          # immutable per-patch revision
-ROLLING="${ROLLING:-13.0-patched-latest}"        # rolling tag for Coolify to track
-BUILD_HOST="${BUILD_HOST:-ssh://root@popos-sf3.com}"
+action=${1:-build}
+registry=${2:-}
+base_registry=${3:-docker.io}
+metadata_file=${4:?Supply the image metadata output path}
+repo_root=$(git -C "$(dirname "$0")" rev-parse --show-toplevel)
 
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-FULL="${REGISTRY}/${IMAGE}:${VERSION}"
-LATEST="${REGISTRY}/${IMAGE}:${ROLLING}"
+case "$action" in
+  test)
+    docker buildx build --platform linux/amd64 --target encoding-tests \
+      --build-arg "BASE_REGISTRY=$base_registry" \
+      --output type=cacheonly --file "$repo_root/docker/Dockerfile" "$repo_root"
+    exit
+    ;;
+  build|publish) ;;
+  *) printf 'Unknown image action: %s\n' "$action" >&2; exit 64 ;;
+esac
 
-echo ">> building ${FULL}"
-echo "   (+ ${LATEST}) on ${BUILD_HOST}"
-DOCKER_HOST="${BUILD_HOST}" docker build \
-  -f "${REPO_ROOT}/docker/Dockerfile" \
-  -t "${FULL}" -t "${LATEST}" \
-  "${REPO_ROOT}"
-
-if [[ "${PUSH:-0}" == "1" ]]; then
-  echo ">> pushing to ${REGISTRY} (requires prior: docker login ${REGISTRY})"
-  DOCKER_HOST="${BUILD_HOST}" docker push "${FULL}"
-  DOCKER_HOST="${BUILD_HOST}" docker push "${LATEST}"
+: "${registry:?Supply the hosted registry hostname}"
+revision=$(git -C "$repo_root" rev-parse HEAD)
+branch=$(git -C "$repo_root" symbolic-ref --short HEAD)
+branch=$(printf '%s' "$branch" | tr '/' '-' | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_.-')
+version=$(git -C "$repo_root" show "$revision:docker/Dockerfile" | sed -n 's/^ARG IMAGE_VERSION=//p')
+image="$registry/seafile-pro-mc"
+build=(docker buildx build --platform linux/amd64 --target patched \
+  --build-arg "BASE_REGISTRY=$base_registry" --build-arg "GIT_SHA=$revision" \
+  --metadata-file "$metadata_file" --file docker/Dockerfile \
+  --tag "$image:$branch-latest" --tag "$image:$branch-$version" \
+  --tag "$image:$branch-$version-${revision:0:12}")
+if [[ "$action" == publish ]]; then
+  build+=(--push)
+else
+  build+=(--load)
 fi
 
-echo ">> done: ${FULL}"
+# Publish only the named committed revision, preserving unrelated worktree edits.
+git -C "$repo_root" archive "$revision" | "${build[@]}" -
+printf 'Image revision: %s\nImage selection: %s:%s-%s-%s\nMetadata: %s\n' \
+  "$revision" "$image" "$branch" "$version" "${revision:0:12}" "$metadata_file"

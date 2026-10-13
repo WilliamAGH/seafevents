@@ -26,7 +26,8 @@
 # fail loudly if any patched file no longer matches the new base layout.
 
 ARG BASE_DIGEST=sha256:0487087748346f702567bee9ea6b46402041b83d3231f091c79a0e4eb8af76c8
-FROM seafileltd/seafile-pro-mc@${BASE_DIGEST}
+ARG BASE_REGISTRY=docker.io
+FROM ${BASE_REGISTRY}/seafileltd/seafile-pro-mc@${BASE_DIGEST} AS patched
 
 # Must match the server directory inside the pinned base image.
 ARG SEAFILE_SERVER_DIR=/opt/seafile/seafile-pro-server-13.0.19
@@ -42,6 +43,7 @@ RUN set -eux; \
 COPY face_recognition/face_recognition_manager.py ${SEAFILE_SERVER_DIR}/pro/python/seafevents/face_recognition/face_recognition_manager.py
 COPY face_recognition/utils.py                    ${SEAFILE_SERVER_DIR}/pro/python/seafevents/face_recognition/utils.py
 COPY repo_metadata/seafile_ai_api.py              ${SEAFILE_SERVER_DIR}/pro/python/seafevents/repo_metadata/seafile_ai_api.py
+COPY seasearch/utils/extract.py                   ${SEAFILE_SERVER_DIR}/pro/python/seafevents/seasearch/utils/extract.py
 
 # 3. Patched seahub files (vendored). apis.py is the PRO-patched variant.
 COPY docker/seahub/ai/utils.py                    ${SEAFILE_SERVER_DIR}/seahub/seahub/ai/utils.py
@@ -60,6 +62,7 @@ RUN set -eux; \
       ${SEAFILE_SERVER_DIR}/pro/python/seafevents/face_recognition/face_recognition_manager.py \
       ${SEAFILE_SERVER_DIR}/pro/python/seafevents/face_recognition/utils.py \
       ${SEAFILE_SERVER_DIR}/pro/python/seafevents/repo_metadata/seafile_ai_api.py \
+      ${SEAFILE_SERVER_DIR}/pro/python/seafevents/seasearch/utils/extract.py \
       ${SEAFILE_SERVER_DIR}/seahub/seahub/ai/utils.py \
       ${SEAFILE_SERVER_DIR}/seahub/seahub/repo_metadata/apis.py; \
     grep -q 'pop(old_label_id, None)' ${SEAFILE_SERVER_DIR}/pro/python/seafevents/face_recognition/face_recognition_manager.py; \
@@ -74,3 +77,18 @@ RUN set -eux; \
 LABEL org.opencontainers.image.title="seafile-pro-mc (face-recognition patched)" \
       org.opencontainers.image.description="seafile-pro-mc 13.0.19 + scikit-learn/scipy + face-cluster and startup fixes (see docker/README.md)" \
       org.opencontainers.image.base.name="seafileltd/seafile-pro-mc:13.0-latest"
+
+ARG IMAGE_VERSION=13.0.19-patched.3
+ARG GIT_SHA
+LABEL org.opencontainers.image.version=${IMAGE_VERSION} \
+      org.opencontainers.image.revision=${GIT_SHA}
+
+FROM patched AS encoding-tests
+COPY tests/seasearch/test_extract_encoding.py /encoding-tests/test_extract_encoding.py
+RUN mkdir -p /tmp/encoding-config && \
+    touch /tmp/encoding-config/seafile.conf && \
+    SEAFILE_CONF_DIR=/tmp/encoding-config \
+    SEAFILE_CENTRAL_CONF_DIR=/tmp/encoding-config \
+    SEAHUB_DIR=${SEAFILE_SERVER_DIR}/seahub \
+    PYTHONPATH=${SEAFILE_SERVER_DIR}/seafile/lib/python3/site-packages:${SEAFILE_SERVER_DIR}/seafile/lib64/python3/site-packages:${SEAFILE_SERVER_DIR}/seahub/thirdpart:${SEAFILE_SERVER_DIR}/pro/python \
+    python3 -m unittest discover -s /encoding-tests -p test_extract_encoding.py
