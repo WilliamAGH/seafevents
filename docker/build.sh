@@ -20,7 +20,8 @@ esac
 
 : "${registry:?Supply the hosted registry hostname}"
 revision=$(git -C "$repo_root" rev-parse HEAD)
-branch=$(git -C "$repo_root" symbolic-ref --short HEAD)
+common_dir=$(git -C "$repo_root" rev-parse --path-format=absolute --git-common-dir)
+branch=$(git --git-dir="$common_dir" symbolic-ref --short HEAD)
 branch=$(printf '%s' "$branch" | tr '/' '-' | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_.-')
 version=$(git -C "$repo_root" show "$revision:docker/Dockerfile" | sed -n 's/^ARG IMAGE_VERSION=//p')
 image="$registry/seafile-pro-mc"
