@@ -1,8 +1,8 @@
 # Patched `seafile-pro-mc` image
 
-A thin derived image over `seafileltd/seafile-pro-mc:13.0.19` (pinned by digest)
-that bakes in the face-recognition patches previously applied at container boot
-by a large Coolify-compose entrypoint.
+A thin derived image over `seafileltd/seafile-pro-mc:13.0.19`
+that includes the face-recognition and startup patches plus strict UTF-8-first
+text extraction for SeaSearch.
 
 ## What it changes vs the stock image
 
@@ -15,10 +15,11 @@ by a large Coolify-compose entrypoint.
 | `seahub/seahub/repo_metadata/apis.py` | register the `_people` metadata view on enable (PRO-patched variant) | — |
 | (image) | pre-install `scikit-learn` + `scipy` at build time | stock image omits them → clustering silently no-ops |
 | `/scripts/enterpoint.sh` | clear stale runtime pidfiles before startup; run `start.py` in the foreground | host reboot can preserve stale `/opt/seafile/pids/seahub.pid`; the stock entrypoint backgrounds startup and leaves Docker stuck `running/unhealthy` instead of triggering restart policy |
+| `pro/python/seafevents/seasearch/utils/extract.py` | decode complete UTF-8 text before detecting legacy encodings | an ASCII prefix must not hide Unicode later in a text file |
 
 `face_cluster.py` is intentionally **unchanged** — the old boot-patch's
 `LOCK_TIMEOUT` bump silently no-op'd and the lock-refresh thread already keeps
-long fits alive, so shipping it pristine matches proven production behaviour.
+long fits alive, so shipping it pristine matches proven production behavior.
 
 ## Source-of-truth & verification
 
@@ -33,10 +34,19 @@ production.
 ## Build / push
 
 ```bash
-./docker/build.sh            # build on sf3 (x86_64) via DOCKER_HOST=ssh
-PUSH=1 ./docker/build.sh     # build + push to registry.haiku.host
+make test-indexing BASE_REGISTRY=dockerhub.haiku.host
+make image-build REGISTRY=registry.haiku.host BASE_REGISTRY=dockerhub.haiku.host
+make image-publish REGISTRY=registry.haiku.host BASE_REGISTRY=dockerhub.haiku.host
 ```
 
-Then point the Coolify `seafile` service `image:` at
-`registry.haiku.host/seafile/seafile-pro-mc:13.0-patched-latest` and remove
-the inline boot-patch `command:` from the compose.
+Run these targets from the repository root. They use the host's compute admission
+and a shared image lock. Build and publish use committed Git archive inputs.
+The test target runs the decoder boundary tests in the packaged Seafile runtime.
+
+Publication writes `seafile-pro-mc` at the selected registry with three tags:
+`<branch>-latest`, `<branch>-<version>`, and `<branch>-<version>-<short-sha>`.
+The full source revision is recorded in the image label. The metadata file
+reported by Make contains the published manifest digest.
+
+Select the published image through the existing deployment control plane and
+verify its revision and decoder behavior after deployment.
