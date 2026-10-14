@@ -4,3 +4,4 @@
 *.template export-ignore
 *.sh export-ignore
 Makefile export-ignore
+docker/** -export-ignore
